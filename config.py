@@ -37,6 +37,7 @@ TARGET_ENUM = Literal[
     "bulk_modulus_kv",
     "shear_modulus_gv",
     "mbj_bandgap",
+    "hse_bandgap",
     "slme",
     "magmom_oszicar",
     "spillage",
