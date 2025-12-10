@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from models.lobster_predictor import LOBSTERPredictorEnsemble
 from jarvis.db.figshare import data as jarvis_data
+from data import load_jarvis_data_smart
 from graphs import Graph
 
 
@@ -260,7 +261,7 @@ def main():
 
     # 加载JARVIS数据
     print(f"\n📊 加载JARVIS数据集: {args.dataset}")
-    jarvis_db = jarvis_data(args.dataset)
+    jarvis_db = load_jarvis_data_smart(args.dataset)
 
     # 限制样本数（用于测试）
     if args.max_samples is not None:

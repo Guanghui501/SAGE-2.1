@@ -18,6 +18,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import math
 from jarvis.db.jsonutils import dumpjson
+import json
 
 # from sklearn.pipeline import Pipeline
 import pickle as pk
@@ -27,6 +28,82 @@ from sklearn.preprocessing import StandardScaler
 
 # use pandas progress_apply
 tqdm.pandas()
+
+
+# Local JARVIS data paths (checked before downloading from figshare)
+LOCAL_JARVIS_BASE_PATHS = [
+    "/public/home/ghzhang/crysmmnet-main/dataset/jarvis",
+    Path.home() / ".jarvis" / "datasets",
+]
+
+
+def load_jarvis_data_smart(dataset_name):
+    """智能加载JARVIS数据：优先使用本地文件，否则从figshare下载
+
+    检查顺序：
+    1. 本地路径（/public/home/ghzhang/crysmmnet-main/dataset/jarvis/{dataset_name}）
+    2. 用户主目录（~/.jarvis/datasets/{dataset_name}）
+    3. 在线下载（jarvis.db.figshare.data）
+
+    Args:
+        dataset_name: JARVIS数据集名称（如 'dft_3d', 'hse_bandgap' 等）
+
+    Returns:
+        data: JARVIS数据列表
+    """
+    # 1. 检查本地路径
+    for base_path in LOCAL_JARVIS_BASE_PATHS:
+        base_path = Path(base_path)
+
+        # 检查是否有以数据集名称命名的目录或文件
+        data_dir = base_path / dataset_name
+
+        # 情况1: 目录存在
+        if data_dir.is_dir():
+            # 查找JSON文件
+            json_files = list(data_dir.glob("*.json"))
+            if json_files:
+                print(f"✅ 从本地加载JARVIS数据: {json_files[0]}")
+                return _load_json_file(json_files[0])
+
+            # 查找Pickle文件
+            pkl_files = list(data_dir.glob("*.pkl")) + list(data_dir.glob("*.pickle"))
+            if pkl_files:
+                print(f"✅ 从本地加载JARVIS数据: {pkl_files[0]}")
+                return _load_pickle_file(pkl_files[0])
+
+        # 情况2: 直接的JSON文件
+        json_file = base_path / f"{dataset_name}.json"
+        if json_file.is_file():
+            print(f"✅ 从本地加载JARVIS数据: {json_file}")
+            return _load_json_file(json_file)
+
+        # 情况3: 直接的Pickle文件
+        for ext in ['.pkl', '.pickle']:
+            pkl_file = base_path / f"{dataset_name}{ext}"
+            if pkl_file.is_file():
+                print(f"✅ 从本地加载JARVIS数据: {pkl_file}")
+                return _load_pickle_file(pkl_file)
+
+    # 2. 如果本地没有找到，使用在线下载
+    print(f"📡 本地未找到数据，从figshare下载: {dataset_name}")
+    return jdata(dataset_name)
+
+
+def _load_json_file(file_path):
+    """加载JSON文件"""
+    with open(file_path, 'r') as f:
+        data = json.load(f)
+    print(f"   加载了 {len(data)} 个样本")
+    return data
+
+
+def _load_pickle_file(file_path):
+    """加载Pickle文件"""
+    with open(file_path, 'rb') as f:
+        data = pk.load(f)
+    print(f"   加载了 {len(data)} 个样本")
+    return data
 
 
 
@@ -162,7 +239,7 @@ def get_train_val_loaders(dataset: str = "dft_3d",dataset_array=[],target: str =
             val_loader.num_workers = workers
     else:
         if not dataset_array:
-            d = jdata(dataset)
+            d = load_jarvis_data_smart(dataset)
         else:
             d = dataset_array
         dat = []

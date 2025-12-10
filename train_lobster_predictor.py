@@ -41,6 +41,7 @@ from models.lobster_predictor import (
 from utils.lobster_features import LobsterFeatureExtractor
 from data import get_torch_dataset
 from jarvis.db.figshare import data as jarvis_data
+from data import load_jarvis_data_smart
 
 
 class LOBSTERPredictorDataset(torch.utils.data.Dataset):
@@ -379,7 +380,7 @@ def main():
 
     # 加载JARVIS数据
     print("\n📊 加载JARVIS数据...")
-    jarvis_db = jarvis_data(args.dataset)
+    jarvis_db = load_jarvis_data_smart(args.dataset)
 
     # 加载重叠映射
     print(f"📂 加载重叠映射: {args.overlap_map}")
