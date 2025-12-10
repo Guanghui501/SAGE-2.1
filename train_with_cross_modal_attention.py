@@ -424,13 +424,40 @@ def load_dataset(cif_dir, id_prop_file, dataset, property_name):
             elif dataset.lower() == 'toy':
                 id, composition, target, crys_desc_full, _ = data[j]
 
-            # 读取CIF文件
-            file_path = os.path.join(cif_dir, f'{id}.cif')
-            if not os.path.exists(file_path):
-                skipped += 1
-                continue
+            # 智能读取结构文件（支持CIF和POSCAR格式）
+            # 首先尝试CIF格式
+            cif_path = os.path.join(cif_dir, f'{id}.cif')
+            poscar_path = os.path.join(cif_dir, f'{id}.poscar')
+            vasp_path = os.path.join(cif_dir, f'{id}.vasp')
+            poscar_noext = os.path.join(cif_dir, f'{id}', 'POSCAR')  # 可能在子目录中
 
-            atoms = Atoms.from_cif(file_path)
+            atoms = None
+            actual_path = None
+
+            # 尝试不同格式
+            for path, loader in [
+                (cif_path, lambda p: Atoms.from_cif(p)),
+                (poscar_path, lambda p: Atoms.from_poscar(p)),
+                (vasp_path, lambda p: Atoms.from_poscar(p)),
+                (poscar_noext, lambda p: Atoms.from_poscar(p)),
+            ]:
+                if os.path.exists(path):
+                    try:
+                        atoms = loader(path)
+                        actual_path = path
+                        break
+                    except Exception as load_err:
+                        # 文件存在但解析失败，继续尝试其他格式
+                        if skipped <= 5:
+                            print(f"⚠️  {path} 解析失败: {load_err}")
+                        continue
+
+            # 如果所有格式都失败
+            if atoms is None:
+                skipped += 1
+                if skipped <= 5:
+                    print(f"❌ 样本 {id}: 找不到或无法解析结构文件 (.cif/.poscar/.vasp)")
+                continue
 
             # 构建样本
             info = {
