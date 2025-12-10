@@ -244,13 +244,91 @@ def get_train_val_loaders(dataset: str = "dft_3d",dataset_array=[],target: str =
             d = dataset_array
         dat = []
         all_targets = []
-        for i in d:
-            if isinstance(i[target], list):  # multioutput target
-                all_targets.append(torch.tensor(i[target]))
+
+        # 统计跳过的样本
+        skip_stats = {
+            'missing_target': 0,
+            'target_none': 0,
+            'target_na': 0,
+            'target_nan': 0,
+            'other_errors': 0
+        }
+
+        for idx, i in enumerate(d):
+            try:
+                # 检查样本是否是字典
+                if not isinstance(i, dict):
+                    skip_stats['other_errors'] += 1
+                    if skip_stats['other_errors'] <= 5:  # 只打印前5个错误
+                        print(f"⚠️  样本 #{idx} 不是字典，跳过 (类型: {type(i).__name__})")
+                    continue
+
+                # 检查是否有目标字段
+                if target not in i:
+                    skip_stats['missing_target'] += 1
+                    if skip_stats['missing_target'] <= 5:
+                        print(f"⚠️  样本 #{idx} (jid={i.get('jid', 'N/A')}) 缺少字段 '{target}'，跳过")
+                    continue
+
+                target_value = i[target]
+
+                # 处理列表类型的目标
+                if isinstance(target_value, list):
+                    all_targets.append(torch.tensor(target_value))
+                    dat.append(i)
+                    continue
+
+                # 检查None
+                if target_value is None:
+                    skip_stats['target_none'] += 1
+                    continue
+
+                # 检查"na"字符串
+                if target_value == "na":
+                    skip_stats['target_na'] += 1
+                    continue
+
+                # 检查NaN
+                try:
+                    if math.isnan(target_value):
+                        skip_stats['target_nan'] += 1
+                        continue
+                except (TypeError, ValueError):
+                    # 如果不能检查isnan，可能是字符串或其他类型
+                    skip_stats['other_errors'] += 1
+                    if skip_stats['other_errors'] <= 5:
+                        print(f"⚠️  样本 #{idx} (jid={i.get('jid', 'N/A')}) 目标值类型异常: {type(target_value).__name__} = {target_value}")
+                    continue
+
+                # 有效样本
                 dat.append(i)
-            elif (i[target] is not None and i[target] != "na" and not math.isnan(i[target])):
-                dat.append(i)
-                all_targets.append(i[target])
+                all_targets.append(target_value)
+
+            except Exception as e:
+                skip_stats['other_errors'] += 1
+                if skip_stats['other_errors'] <= 5:
+                    print(f"❌ 样本 #{idx} 处理出错: {type(e).__name__}: {str(e)}")
+                continue
+
+        # 打印跳过统计
+        total_skipped = sum(skip_stats.values())
+        if total_skipped > 0:
+            print(f"\n⚠️  数据加载统计:")
+            print(f"   总样本数: {len(d)}")
+            print(f"   成功加载: {len(dat)} ({len(dat)/len(d)*100:.1f}%)")
+            print(f"   跳过样本: {total_skipped} ({total_skipped/len(d)*100:.1f}%)")
+            print(f"   跳过原因:")
+            if skip_stats['missing_target'] > 0:
+                print(f"     - 缺少'{target}'字段: {skip_stats['missing_target']}")
+            if skip_stats['target_none'] > 0:
+                print(f"     - 目标值为None: {skip_stats['target_none']}")
+            if skip_stats['target_na'] > 0:
+                print(f"     - 目标值为'na': {skip_stats['target_na']}")
+            if skip_stats['target_nan'] > 0:
+                print(f"     - 目标值为NaN: {skip_stats['target_nan']}")
+            if skip_stats['other_errors'] > 0:
+                print(f"     - 其他错误: {skip_stats['other_errors']}")
+            print()
 
         id_train, id_val, id_test = get_id_train_val_test(total_size=len(dat),split_seed=split_seed,train_ratio=train_ratio,val_ratio=val_ratio,test_ratio=test_ratio,
                                                           n_train=n_train,n_test=n_test,n_val=n_val,keep_data_order=keep_data_order)
