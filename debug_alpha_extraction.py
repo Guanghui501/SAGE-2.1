@@ -166,8 +166,6 @@ def diagnose_model(checkpoint_path, root_dir):
 
     # 8. 分析文本特征和节点特征的余弦相似度
     print("\n🔍 计算文本-节点余弦相似度:")
-    node_feat_raw = captured_data.get('node_feat_shape')
-    text_feat_raw = captured_data.get('text_feat_shape')
 
     # 重新运行一次以获取实际tensor（之前只保存了shape）
     captured_tensors = {}
@@ -184,27 +182,50 @@ def diagnose_model(checkpoint_path, root_dir):
     hook.remove()
 
     if 'node_feat' in captured_tensors and 'text_feat' in captured_tensors:
-        node_feat = captured_tensors['node_feat']
-        text_feat = captured_tensors['text_feat']
+        node_feat = captured_tensors['node_feat']  # [42, 256]
+        text_feat = captured_tensors['text_feat']  # [2, 64]
         batch_num_nodes = captured_tensors['batch_num_nodes']
+
+        print(f"   - 节点特征维度: {node_feat.shape}")
+        print(f"   - 文本特征维度: {text_feat.shape}")
+
+        # === 关键修复：使用 text_transform 后的特征 ===
+        # text_transform 会将 [Batch, 64] → [Batch, 256]
+        text_transformed = fusion_module.text_transform(text_feat)  # [2, 256]
+        print(f"   - 文本变换后维度: {text_transformed.shape}")
 
         # 广播text特征到节点
         text_expanded = []
         for i, num in enumerate(batch_num_nodes):
-            text_expanded.append(text_feat[i].unsqueeze(0).repeat(num, 1))
-        text_broadcasted = torch.cat(text_expanded, dim=0)
+            text_expanded.append(text_transformed[i].unsqueeze(0).repeat(num, 1))
+        text_broadcasted = torch.cat(text_expanded, dim=0)  # [42, 256]
 
         # 计算余弦相似度
         cos_sim = F.cosine_similarity(node_feat, text_broadcasted, dim=1)
-        print(f"   - 余弦相似度均值: {cos_sim.mean().item():.4f}")
-        print(f"   - 余弦相似度标准差: {cos_sim.std().item():.4f}")
-        print(f"   - 余弦相似度范围: [{cos_sim.min().item():.4f}, {cos_sim.max().item():.4f}]")
+        print(f"\n   📊 余弦相似度统计:")
+        print(f"      - 均值: {cos_sim.mean().item():.4f}")
+        print(f"      - 标准差: {cos_sim.std().item():.4f}")
+        print(f"      - 范围: [{cos_sim.min().item():.4f}, {cos_sim.max().item():.4f}]")
+
+        # 分析相似度分布
+        low_sim = (cos_sim < 0.1).sum().item()
+        mid_sim = ((cos_sim >= 0.1) & (cos_sim < 0.5)).sum().item()
+        high_sim = (cos_sim >= 0.5).sum().item()
+
+        print(f"\n   📈 相似度分布:")
+        print(f"      - 低相似度 (<0.1): {low_sim}/{len(cos_sim)} ({100*low_sim/len(cos_sim):.1f}%)")
+        print(f"      - 中相似度 (0.1-0.5): {mid_sim}/{len(cos_sim)} ({100*mid_sim/len(cos_sim):.1f}%)")
+        print(f"      - 高相似度 (>0.5): {high_sim}/{len(cos_sim)} ({100*high_sim/len(cos_sim):.1f}%)")
 
         if abs(cos_sim.mean().item()) < 0.1:
-            print("   ⚠️  警告: 余弦相似度极低! 可能原因:")
+            print("\n   ⚠️  警告: 余弦相似度极低! 可能原因:")
             print("      1. 文本和图特征在不同的向量空间")
             print("      2. 特征归一化问题")
             print("      3. 文本特征没有有效融入图编码")
+        elif cos_sim.mean().item() > 0.5:
+            print("\n   ✅ 余弦相似度较高，文本特征有效融入!")
+        else:
+            print("\n   ⚠️  余弦相似度中等，融合效果有限")
 
     print("\n" + "=" * 80)
     print("✅ 诊断完成")

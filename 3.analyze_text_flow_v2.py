@@ -25,7 +25,7 @@ class TextFlowAnalyzer:
         
     def register_hooks(self):
         """注册钩子：既捕获层输出，也捕获文本特征"""
-        
+
         # 1. 捕获 GCN/ALIGNN 层的节点特征
         def get_layer_output(name):
             def hook(model, input, output):
@@ -39,17 +39,19 @@ class TextFlowAnalyzer:
         if hasattr(self.model, 'alignn_layers'):
             for i, layer in enumerate(self.model.alignn_layers):
                 layer.register_forward_hook(get_layer_output(f'Layer {i+1} (ALIGNN)'))
-                
+
         # 注册 GCN 层
         if hasattr(self.model, 'gcn_layers'):
             for i, layer in enumerate(self.model.gcn_layers):
                 layer.register_forward_hook(get_layer_output(f'Layer {i+5} (GCN)'))
 
         # 2. [关键修复] 捕获 MiddleFusionModule 内部处理好的文本特征
-        # 我们直接 Hook 它的 text_transform 层，拿到 [Batch, 64] 的特征
-        
+        # 我们直接 Hook 它的 text_transform 层，拿到 [Batch, Node_Dim] 的特征
+        # 注意：text_transform 输出是 256 维（匹配节点特征），而不是 64 维
+
         def get_text_emb(model, input, output):
-            # output 就是经过 Linear+ReLU 后的文本特征，维度一定是匹配的
+            # output 就是经过 text_transform 后的文本特征
+            # 输入: [Batch, 64] → 输出: [Batch, Node_Dim] (例如 256)
             self.captured_text_emb = output.detach()
 
         # 自动查找并注册 fusion hook
@@ -60,9 +62,9 @@ class TextFlowAnalyzer:
                 if hasattr(module, 'text_transform'):
                     module.text_transform.register_forward_hook(get_text_emb)
                     fusion_found = True
-                    # print("✅ 已Hook到 MiddleFusionModule.text_transform")
+                    print(f"✅ 已Hook到 MiddleFusionModule.text_transform (输出维度: {module.node_dim})")
                     break # 只需要Hook第一个找到的即可
-        
+
         if not fusion_found:
             print("⚠️ 警告: 未找到 MiddleFusionModule，无法捕获文本特征！")
 
