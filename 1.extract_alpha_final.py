@@ -237,9 +237,29 @@ def main():
 
     # 5. 保存
     if len(results['alphas']) > 0:
-        #np.savez(args.output, **results)
-        #print(f"\n✅ 成功保存 {len(results['alphas'])} 个样本的 Alpha 值到: {args.output}")
         print(f" 正在打包数据 (共 {len(results['alphas'])} 个样本)...")
+
+        # === 添加统计信息 ===
+        all_alphas = np.concatenate(results['alphas'])
+        print(f"\n📊 Alpha 值统计:")
+        print(f"   - 样本数: {len(results['alphas'])}")
+        print(f"   - 总原子数: {len(all_alphas)}")
+        print(f"   - 均值: {all_alphas.mean():.4f}")
+        print(f"   - 标准差: {all_alphas.std():.4f}")
+        print(f"   - 最小值: {all_alphas.min():.4f}")
+        print(f"   - 最大值: {all_alphas.max():.4f}")
+        print(f"   - 25%分位: {np.percentile(all_alphas, 25):.4f}")
+        print(f"   - 50%分位: {np.percentile(all_alphas, 50):.4f}")
+        print(f"   - 75%分位: {np.percentile(all_alphas, 75):.4f}")
+
+        # 检查是否有异常集中
+        if all_alphas.std() < 0.05:
+            print(f"\n   ⚠️  警告: 标准差过小 ({all_alphas.std():.4f})，Alpha 值缺乏多样性!")
+            print(f"      可能原因:")
+            print(f"      1. Gate 网络权重饱和（Sigmoid 输出集中）")
+            print(f"      2. 输入特征缺乏区分度")
+            print(f"      3. 模型训练不充分")
+
         save_dict = {
             'alphas': np.array(results['alphas'], dtype=object),
             'atom_types': np.array(results['atom_types'], dtype=object),

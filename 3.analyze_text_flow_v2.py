@@ -95,12 +95,29 @@ class TextFlowAnalyzer:
 
         # 4. 计算相似度
         similarities = {}
+        skipped_layers = []
+
         for name, layer_feat in self.layer_outputs.items():
             # 维度校验
             if layer_feat.shape[1] == text_broadcasted.shape[1]:
                 sim = F.cosine_similarity(layer_feat, text_broadcasted, dim=1)
                 similarities[name] = sim.mean().item()
-            
+
+                # 诊断信息（仅第一次）
+                if len(similarities) == 1:
+                    print(f"\n   ✅ 维度匹配: layer_feat={layer_feat.shape}, text={text_broadcasted.shape}")
+                    print(f"   - 层特征 L2 范数: {layer_feat.norm(dim=1).mean():.4f}")
+                    print(f"   - 文本特征 L2 范数: {text_broadcasted.norm(dim=1).mean():.4f}")
+                    print(f"   - 余弦相似度: {sim.mean().item():.4f}")
+            else:
+                skipped_layers.append((name, layer_feat.shape[1], text_broadcasted.shape[1]))
+
+        # 报告跳过的层
+        if skipped_layers:
+            print(f"\n   ⚠️  跳过了 {len(skipped_layers)} 个维度不匹配的层:")
+            for name, layer_dim, text_dim in skipped_layers[:3]:  # 只显示前3个
+                print(f"      - {name}: layer_dim={layer_dim}, text_dim={text_dim}")
+
         return similarities
 
 def plot_layer_similarity(sim_records, output_file):
