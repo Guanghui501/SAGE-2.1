@@ -203,7 +203,7 @@ def train_dgl(config: Union[TrainingConfig, Dict[str, Any]], model: nn.Module = 
     # print(model_number)
     # exit()
     if resume ==1:
-        checkpoint = torch.load(config.output_dir+'checkpoint_'+str(max(model_number))+'.pt')
+        checkpoint = torch.load(config.output_dir+'checkpoint_'+str(max(model_number))+'.pt', weights_only=False)
         net.load_state_dict(checkpoint["model"])
 
     net.to(device)
