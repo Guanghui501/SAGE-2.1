@@ -244,8 +244,15 @@ def train_dgl(config: Union[TrainingConfig, Dict[str, Any]], model: nn.Module = 
 
     if resume ==1:
         if "lr_scheduler" in checkpoint:
-            scheduler.load_state_dict(checkpoint["lr_scheduler"])
-            print("✅ 已加载 scheduler 状态")
+            # 对于 OneCycleLR，在 resume 时不加载旧的 scheduler state
+            # 因为它的总步数是固定的，会与新的 epochs 设置冲突
+            if config.scheduler == "onecycle":
+                print("⚠️  检测到 OneCycleLR scheduler")
+                print("   Resume 训练时不加载旧 scheduler 状态（避免步数冲突）")
+                print("   Scheduler 将从头开始，学习率会重新 warm up")
+            else:
+                scheduler.load_state_dict(checkpoint["lr_scheduler"])
+                print("✅ 已加载 scheduler 状态")
         else:
             print("⚠️  Checkpoint 中没有 scheduler 状态，将使用新的 scheduler")
 
