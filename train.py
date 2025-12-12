@@ -203,8 +203,22 @@ def train_dgl(config: Union[TrainingConfig, Dict[str, Any]], model: nn.Module = 
     # print(model_number)
     # exit()
     if resume ==1:
-        checkpoint = torch.load(config.output_dir+'checkpoint_'+str(max(model_number))+'.pt', weights_only=False)
+        checkpoint_path = config.output_dir+'checkpoint_'+str(max(model_number))+'.pt'
+        print(f"\n{'='*80}")
+        print(f"🔄 恢复训练")
+        print(f"{'='*80}")
+        print(f"加载 checkpoint: {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, weights_only=False)
+
+        # 显示 checkpoint 包含的内容
+        print(f"Checkpoint 包含的键: {list(checkpoint.keys())}")
+        if "epoch" in checkpoint:
+            print(f"从 Epoch {checkpoint['epoch']} 恢复")
+
+        # 加载模型权重
         net.load_state_dict(checkpoint["model"])
+        print("✅ 已加载模型权重")
+        print(f"{'='*80}\n")
 
     net.to(device)
 
@@ -213,7 +227,11 @@ def train_dgl(config: Union[TrainingConfig, Dict[str, Any]], model: nn.Module = 
     optimizer = setup_optimizer(params, config)
 
     if resume ==1:
-        optimizer.load_state_dict(checkpoint["optimizer"])
+        if "optimizer" in checkpoint:
+            optimizer.load_state_dict(checkpoint["optimizer"])
+            print("✅ 已加载 optimizer 状态")
+        else:
+            print("⚠️  Checkpoint 中没有 optimizer 状态，将使用新的 optimizer")
 
     if config.scheduler == "none":
         # always return multiplier of 1 (i.e. do nothing)
@@ -225,7 +243,11 @@ def train_dgl(config: Union[TrainingConfig, Dict[str, Any]], model: nn.Module = 
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer)
 
     if resume ==1:
-        scheduler.load_state_dict(checkpoint["lr_scheduler"])
+        if "lr_scheduler" in checkpoint:
+            scheduler.load_state_dict(checkpoint["lr_scheduler"])
+            print("✅ 已加载 scheduler 状态")
+        else:
+            print("⚠️  Checkpoint 中没有 scheduler 状态，将使用新的 scheduler")
 
     # select configured loss function
     criteria = {
@@ -318,7 +340,11 @@ def train_dgl(config: Union[TrainingConfig, Dict[str, Any]], model: nn.Module = 
         trainer = ignite.engine.Engine(train_step_with_clip)
 
     if resume ==1:
-        trainer.load_state_dict(checkpoint["trainer"])
+        if "trainer" in checkpoint:
+            trainer.load_state_dict(checkpoint["trainer"])
+            print("✅ 已加载 trainer 状态")
+        else:
+            print("⚠️  Checkpoint 中没有 trainer 状态，将从当前 epoch 开始训练")
 
     # Custom output transform for contrastive learning
     if use_contrastive:
