@@ -147,6 +147,12 @@ def get_parser():
                         help='中期融合注意力头数')
     parser.add_argument('--middle_fusion_dropout', type=float, default=0.1,
                         help='中期融合dropout率')
+    parser.add_argument('--middle_fusion_use_gate_norm', type=str2bool, default=False,
+                        help='中期融合是否使用Gate LayerNorm（用于特征尺度平衡）')
+    parser.add_argument('--middle_fusion_use_learnable_scale', type=str2bool, default=False,
+                        help='中期融合是否使用可学习缩放因子（自动学习最优文本特征权重）')
+    parser.add_argument('--middle_fusion_initial_scale', type=float, default=1.0,
+                        help='中期融合可学习缩放因子的初始值（建议基于诊断结果设置，如12.0）')
 
     # 细粒度注意力参数（原子-文本token级别）⭐ NEW!
     parser.add_argument('--use_fine_grained_attention', type=str2bool, default=False,
@@ -501,6 +507,9 @@ def create_config(args):
         middle_fusion_hidden_dim=args.middle_fusion_hidden_dim,
         middle_fusion_num_heads=args.middle_fusion_num_heads,
         middle_fusion_dropout=args.middle_fusion_dropout,
+        middle_fusion_use_gate_norm=args.middle_fusion_use_gate_norm,
+        middle_fusion_use_learnable_scale=args.middle_fusion_use_learnable_scale,
+        middle_fusion_initial_scale=args.middle_fusion_initial_scale,
         # 对比学习配置
         use_contrastive_loss=args.use_contrastive,
         contrastive_loss_weight=args.contrastive_weight,
@@ -628,6 +637,10 @@ def main():
         print(f"  隐藏维度: {args.middle_fusion_hidden_dim}")
         print(f"  注意力头数: {args.middle_fusion_num_heads}")
         print(f"  Dropout率: {args.middle_fusion_dropout}")
+        print(f"  Gate LayerNorm: {args.middle_fusion_use_gate_norm}")
+        print(f"  可学习缩放: {args.middle_fusion_use_learnable_scale}")
+        if args.middle_fusion_use_learnable_scale:
+            print(f"  初始缩放值: {args.middle_fusion_initial_scale}")
 
     print(f"\n细粒度注意力配置（原子-文本token级别）:")
     print(f"  启用: {args.use_fine_grained_attention}")
