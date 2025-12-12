@@ -127,7 +127,8 @@ class MiddleFusionModule(nn.Module):
     Uses a simple gated fusion mechanism that works with DGL batched graphs.
     """
 
-    def __init__(self, node_dim=64, text_dim=64, hidden_dim=128, num_heads=2, dropout=0.1):
+    def __init__(self, node_dim=64, text_dim=64, hidden_dim=128, num_heads=2, dropout=0.1,
+                 use_gate_norm=False, use_learnable_scale=False, initial_scale=1.0):
         """Initialize middle fusion module.
 
         Args:
@@ -136,11 +137,16 @@ class MiddleFusionModule(nn.Module):
             hidden_dim: Hidden dimension for fusion
             num_heads: Number of attention heads (for future compatibility)
             dropout: Dropout rate
+            use_gate_norm: Whether to use LayerNorm before gate (for feature scale balance)
+            use_learnable_scale: Whether to use learnable scaling factor for text features
+            initial_scale: Initial value for learnable scaling factor (default: 1.0)
         """
         super().__init__()
         self.node_dim = node_dim
         self.text_dim = text_dim
         self.hidden_dim = hidden_dim
+        self.use_gate_norm = use_gate_norm
+        self.use_learnable_scale = use_learnable_scale
 
         # Text transformation
         self.text_transform = nn.Sequential(
@@ -149,6 +155,18 @@ class MiddleFusionModule(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, node_dim)
         )
+
+        # === 新增：可学习的缩放因子 ===
+        if use_learnable_scale:
+            self.text_scale = nn.Parameter(torch.tensor(initial_scale, dtype=torch.float32))
+            print(f"✅ 启用可学习缩放因子，初始值: {initial_scale:.2f}")
+        else:
+            self.register_buffer('text_scale', torch.tensor(1.0, dtype=torch.float32))
+
+        # === 新增：Gate 输入归一化（用于特征尺度平衡）===
+        if use_gate_norm:
+            self.gate_norm = nn.LayerNorm(node_dim * 2)
+            print(f"✅ 启用 Gate LayerNorm")
 
         # Gate mechanism to control text influence
         self.gate = nn.Sequential(
@@ -185,6 +203,10 @@ class MiddleFusionModule(nn.Module):
 
         # Transform text features
         text_transformed = self.text_transform(text_feat)  # [batch_size, node_dim]
+
+        # === 应用可学习缩放 ===
+        text_transformed = text_transformed * self.text_scale
+
         #print(f"     text_transformed.shape: {text_transformed.shape}")
 
         # Case 1: Batched graphs (total_nodes != batch_size)
@@ -209,6 +231,11 @@ class MiddleFusionModule(nn.Module):
         #print(f"     text_broadcasted.shape: {text_broadcasted.shape}")
         # Gated fusion
         gate_input = torch.cat([node_feat, text_broadcasted], dim=-1)  # [*, node_dim*2]
+
+        # === 应用 Gate LayerNorm（用于特征尺度平衡）===
+        if self.use_gate_norm:
+            gate_input = self.gate_norm(gate_input)
+
         #print(f"     gate_input.shape: {gate_input.shape}")
         gate_values = self.gate(gate_input)  # [*, node_dim]
         
@@ -574,6 +601,9 @@ class ALIGNNConfig(BaseSettings):
     middle_fusion_hidden_dim: int = 128
     middle_fusion_num_heads: int = 2
     middle_fusion_dropout: float = 0.1
+    middle_fusion_use_gate_norm: bool = False  # Use LayerNorm before gate (for feature scale balance)
+    middle_fusion_use_learnable_scale: bool = False  # Use learnable scaling factor for text features
+    middle_fusion_initial_scale: float = 1.0  # Initial value for learnable scaling (use 12.0 based on diagnostics)
 
     # Contrastive learning settings
     use_contrastive_loss: bool = False
@@ -788,7 +818,10 @@ class ALIGNN(nn.Module):
                     text_dim=64,  # After text_projection
                     hidden_dim=config.middle_fusion_hidden_dim,
                     num_heads=config.middle_fusion_num_heads,
-                    dropout=config.middle_fusion_dropout
+                    dropout=config.middle_fusion_dropout,
+                    use_gate_norm=config.middle_fusion_use_gate_norm,
+                    use_learnable_scale=config.middle_fusion_use_learnable_scale,
+                    initial_scale=config.middle_fusion_initial_scale
                 )
             self.middle_fusion_layer_indices = fusion_layers
 

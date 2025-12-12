@@ -1,0 +1,44 @@
+{
+  "name": "alignn",
+  "alignn_layers": 4,
+  "gcn_layers": 4,
+  "atom_input_features": 92,
+  "edge_input_features": 80,
+  "triplet_input_features": 40,
+  "embedding_features": 64,
+  "hidden_features": 256,
+  "output_features": 1,
+
+  "graph_dropout": 0.0,
+
+  "use_cross_modal_attention": true,
+  "cross_modal_hidden_dim": 256,
+  "cross_modal_num_heads": 4,
+  "cross_modal_dropout": 0.1,
+
+  "use_fine_grained_attention": false,
+  "fine_grained_hidden_dim": 256,
+  "fine_grained_num_heads": 8,
+  "fine_grained_dropout": 0.1,
+  "fine_grained_use_projection": true,
+  "mask_stopwords": false,
+  "remove_stopwords": false,
+  "stopwords_dir": "",
+
+  "use_middle_fusion": true,
+  "middle_fusion_layers": "2",
+  "middle_fusion_hidden_dim": 128,
+  "middle_fusion_num_heads": 2,
+  "middle_fusion_dropout": 0.1,
+  "middle_fusion_use_gate_norm": true,
+  "middle_fusion_use_learnable_scale": true,
+  "middle_fusion_initial_scale": 12.0,
+
+  "use_contrastive_loss": false,
+  "contrastive_loss_weight": 0.1,
+  "contrastive_temperature": 0.1,
+
+  "link": "identity",
+  "zero_inflated": false,
+  "classification": false
+}
