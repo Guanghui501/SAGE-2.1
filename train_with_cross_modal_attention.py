@@ -197,17 +197,18 @@ def get_parser():
                         help='门控融合dropout率')
 
     # Gated Cross-Attention参数 ⭐ NEW! (方案三 - 质量感知自适应融合)
-    parser.add_argument('--use_gated_cross_attention', type=str2bool, default=False,
-                        help='是否使用Gated Cross-Attention（质量感知自适应融合）')
-    parser.add_argument('--gated_attention_hidden_dim', type=int, default=256,
-                        help='Gated Cross-Attention隐藏层维度')
-    parser.add_argument('--gated_attention_num_heads', type=int, default=4,
-                        choices=[1, 2, 4, 8],
-                        help='Gated Cross-Attention注意力头数')
-    parser.add_argument('--gated_attention_dropout', type=float, default=0.1,
-                        help='Gated Cross-Attention dropout率')
-    parser.add_argument('--gated_quality_hidden_dim', type=int, default=128,
-                        help='质量门控网络隐藏层维度')
+    # 注意: 这些参数暂时被注释，因为 Gated Cross-Attention 功能尚未在 ALIGNNConfig 中实现
+    # parser.add_argument('--use_gated_cross_attention', type=str2bool, default=False,
+    #                     help='是否使用Gated Cross-Attention（质量感知自适应融合）')
+    # parser.add_argument('--gated_attention_hidden_dim', type=int, default=256,
+    #                     help='Gated Cross-Attention隐藏层维度')
+    # parser.add_argument('--gated_attention_num_heads', type=int, default=4,
+    #                     choices=[1, 2, 4, 8],
+    #                     help='Gated Cross-Attention注意力头数')
+    # parser.add_argument('--gated_attention_dropout', type=float, default=0.1,
+    #                     help='Gated Cross-Attention dropout率')
+    # parser.add_argument('--gated_quality_hidden_dim', type=int, default=128,
+    #                     help='质量门控网络隐藏层维度')
 
     # 其他参数
     parser.add_argument('--output_dir', type=str, default='./output/',
@@ -523,12 +524,6 @@ def create_config(args):
         mask_stopwords=bool(args.mask_stopwords),
         remove_stopwords=bool(args.remove_stopwords),
         stopwords_dir=args.stopwords_dir,
-        # Gated Cross-Attention配置（质量感知自适应融合）⭐ NEW!
-        use_gated_cross_attention=args.use_gated_cross_attention,
-        gated_attention_hidden_dim=args.gated_attention_hidden_dim,
-        gated_attention_num_heads=args.gated_attention_num_heads,
-        gated_attention_dropout=args.gated_attention_dropout,
-        gated_quality_hidden_dim=args.gated_quality_hidden_dim,
         link="identity",
         zero_inflated=False,
         classification=False
