@@ -135,6 +135,15 @@ def get_parser():
     parser.add_argument('--cross_modal_dropout', type=float, default=0.1,
                         help='跨模态注意力dropout率')
 
+    # 后期融合方式参数 ⭐ NEW!
+    parser.add_argument('--late_fusion_type', type=str, default='concat',
+                        choices=['concat', 'gated', 'bilinear', 'adaptive', 'tucker'],
+                        help='后期融合方式: concat(拼接), gated(门控), bilinear(双线性), adaptive(自适应), tucker(Tucker分解)')
+    parser.add_argument('--late_fusion_rank', type=int, default=16,
+                        help='双线性/Tucker融合的秩（低秩分解参数，越大表达能力越强但参数越多）')
+    parser.add_argument('--late_fusion_output_dim', type=int, default=64,
+                        help='后期融合输出维度（对于非concat融合）')
+
     # 中期融合参数
     parser.add_argument('--use_middle_fusion', type=str2bool, default=False,
                         help='是否使用中期融合（在编码过程中注入文本信息）')
@@ -502,6 +511,10 @@ def create_config(args):
         cross_modal_hidden_dim=args.cross_modal_hidden_dim,
         cross_modal_num_heads=args.cross_modal_num_heads,
         cross_modal_dropout=args.cross_modal_dropout,
+        # 后期融合方式配置 ⭐ NEW!
+        late_fusion_type=args.late_fusion_type,
+        late_fusion_rank=args.late_fusion_rank,
+        late_fusion_output_dim=args.late_fusion_output_dim,
         # 中期融合配置
         use_middle_fusion=args.use_middle_fusion,
         middle_fusion_layers=args.middle_fusion_layers,
@@ -624,6 +637,21 @@ def main():
         print(f"  隐藏维度: {args.cross_modal_hidden_dim}")
         print(f"  注意力头数: {args.cross_modal_num_heads}")
         print(f"  Dropout率: {args.cross_modal_dropout}")
+
+    print(f"\n后期融合方式配置:")
+    print(f"  融合类型: {args.late_fusion_type}")
+    fusion_desc = {
+        'concat': '简单拼接（基线）',
+        'gated': '门控融合（自适应权重）',
+        'bilinear': '双线性池化（二阶交互）',
+        'adaptive': '自适应融合（多策略组合）',
+        'tucker': 'Tucker分解（高阶张量）'
+    }
+    print(f"  说明: {fusion_desc.get(args.late_fusion_type, '未知')}")
+    if args.late_fusion_type in ['bilinear', 'tucker']:
+        print(f"  低秩分解Rank: {args.late_fusion_rank}")
+    if args.late_fusion_type != 'concat':
+        print(f"  融合输出维度: {args.late_fusion_output_dim}")
 
     print(f"\n中期融合配置:")
     print(f"  启用: {args.use_middle_fusion}")

@@ -382,6 +382,257 @@ class CrossModalAttention(nn.Module):
             return enhanced_graph, enhanced_text
 
 
+class GatedFusion(nn.Module):
+    """门控融合模块 - 学习动态权重来平衡两种模态
+
+    相比简单concat，门控融合可以：
+    1. 自适应地控制每个模态的贡献
+    2. 对不同样本学习不同的融合权重
+    3. 提供更好的特征交互
+    """
+
+    def __init__(self, graph_dim=64, text_dim=64, output_dim=64, dropout=0.1):
+        super().__init__()
+        self.graph_dim = graph_dim
+        self.text_dim = text_dim
+
+        # 门控网络：学习每个模态的重要性权重
+        self.gate_graph = nn.Sequential(
+            nn.Linear(graph_dim, graph_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(graph_dim // 2, 1),
+            nn.Sigmoid()
+        )
+
+        self.gate_text = nn.Sequential(
+            nn.Linear(text_dim, text_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(text_dim // 2, 1),
+            nn.Sigmoid()
+        )
+
+        # 特征变换
+        self.graph_transform = nn.Linear(graph_dim, output_dim)
+        self.text_transform = nn.Linear(text_dim, output_dim)
+
+        # 融合后的变换
+        self.fusion_transform = nn.Sequential(
+            nn.Linear(output_dim, output_dim),
+            nn.LayerNorm(output_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        )
+
+    def forward(self, graph_feat, text_feat):
+        """
+        Args:
+            graph_feat: [batch, graph_dim]
+            text_feat: [batch, text_dim]
+        Returns:
+            fused: [batch, output_dim]
+        """
+        # 计算门控权重
+        gate_g = self.gate_graph(graph_feat)  # [batch, 1]
+        gate_t = self.gate_text(text_feat)    # [batch, 1]
+
+        # 归一化门控权重（确保和为1）
+        gate_sum = gate_g + gate_t + 1e-8
+        gate_g = gate_g / gate_sum
+        gate_t = gate_t / gate_sum
+
+        # 特征变换
+        graph_transformed = self.graph_transform(graph_feat)  # [batch, output_dim]
+        text_transformed = self.text_transform(text_feat)     # [batch, output_dim]
+
+        # 门控加权融合
+        fused = gate_g * graph_transformed + gate_t * text_transformed
+
+        # 最终变换
+        fused = self.fusion_transform(fused)
+
+        return fused
+
+
+class BilinearFusion(nn.Module):
+    """双线性池化融合 - 捕捉特征之间的二阶交互
+
+    相比简单concat，双线性融合可以：
+    1. 捕捉跨模态的特征交互（外积）
+    2. 学习更丰富的联合表示
+    3. 在视觉-语言任务中效果显著
+    """
+
+    def __init__(self, graph_dim=64, text_dim=64, output_dim=64, rank=16, dropout=0.1):
+        super().__init__()
+        # 使用低秩分解减少参数量：W = U * V^T
+        # 完整双线性: (g^T W t) 需要 graph_dim × text_dim × output_dim 参数
+        # 低秩分解: g^T U * V^T t 只需要 (graph_dim + text_dim) × rank × output_dim
+        self.rank = rank
+
+        self.graph_proj = nn.Linear(graph_dim, rank * output_dim, bias=False)
+        self.text_proj = nn.Linear(text_dim, rank * output_dim, bias=False)
+
+        self.output_dim = output_dim
+        self.dropout = nn.Dropout(dropout)
+        self.layer_norm = nn.LayerNorm(output_dim)
+
+    def forward(self, graph_feat, text_feat):
+        """
+        Args:
+            graph_feat: [batch, graph_dim]
+            text_feat: [batch, text_dim]
+        Returns:
+            fused: [batch, output_dim]
+        """
+        batch_size = graph_feat.size(0)
+
+        # 投影到低秩空间
+        graph_proj = self.graph_proj(graph_feat)  # [batch, rank * output_dim]
+        text_proj = self.text_proj(text_feat)     # [batch, rank * output_dim]
+
+        # Reshape
+        graph_proj = graph_proj.view(batch_size, self.rank, self.output_dim)
+        text_proj = text_proj.view(batch_size, self.rank, self.output_dim)
+
+        # 双线性交互（逐元素乘积然后求和）
+        fused = torch.sum(graph_proj * text_proj, dim=1)  # [batch, output_dim]
+
+        # 归一化和dropout
+        fused = self.layer_norm(fused)
+        fused = self.dropout(fused)
+
+        return fused
+
+
+class AdaptiveFusion(nn.Module):
+    """自适应融合 - 基于样本内容动态选择融合策略
+
+    相比简单concat，自适应融合可以：
+    1. 对不同样本使用不同的融合策略
+    2. 结合加法、乘法、门控等多种融合方式
+    3. 通过注意力机制自动选择最佳策略
+    """
+
+    def __init__(self, graph_dim=64, text_dim=64, output_dim=64, dropout=0.1):
+        super().__init__()
+
+        # 特征对齐
+        self.graph_align = nn.Linear(graph_dim, output_dim)
+        self.text_align = nn.Linear(text_dim, output_dim)
+
+        # 多种融合方式的权重预测器
+        fusion_input_dim = output_dim * 2  # concat of graph and text
+        self.fusion_selector = nn.Sequential(
+            nn.Linear(fusion_input_dim, output_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(output_dim, 3),  # 3种融合策略：加法、乘法、门控
+            nn.Softmax(dim=-1)
+        )
+
+        # 门控融合分支
+        self.gate_net = nn.Sequential(
+            nn.Linear(output_dim * 2, output_dim),
+            nn.Sigmoid()
+        )
+
+        self.layer_norm = nn.LayerNorm(output_dim)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, graph_feat, text_feat):
+        """
+        Args:
+            graph_feat: [batch, graph_dim]
+            text_feat: [batch, text_dim]
+        Returns:
+            fused: [batch, output_dim]
+        """
+        # 特征对齐到相同维度
+        graph_aligned = self.graph_align(graph_feat)  # [batch, output_dim]
+        text_aligned = self.text_align(text_feat)     # [batch, output_dim]
+
+        # 预测融合策略权重
+        concat_feat = torch.cat([graph_aligned, text_aligned], dim=-1)
+        fusion_weights = self.fusion_selector(concat_feat)  # [batch, 3]
+
+        # 三种融合方式
+        # 1. 加法融合
+        fusion_add = graph_aligned + text_aligned
+
+        # 2. 哈达玛积（逐元素乘法）
+        fusion_mul = graph_aligned * text_aligned
+
+        # 3. 门控融合
+        gate = self.gate_net(concat_feat)
+        fusion_gate = gate * graph_aligned + (1 - gate) * text_aligned
+
+        # 加权组合三种融合方式
+        fused = (fusion_weights[:, 0:1] * fusion_add +
+                 fusion_weights[:, 1:2] * fusion_mul +
+                 fusion_weights[:, 2:3] * fusion_gate)
+
+        # 归一化
+        fused = self.layer_norm(fused)
+        fused = self.dropout(fused)
+
+        return fused
+
+
+class TuckerFusion(nn.Module):
+    """Tucker分解融合 - 高效的高阶张量分解
+
+    相比简单concat，Tucker融合可以：
+    1. 捕捉高阶特征交互
+    2. 参数量更少但表达能力更强
+    3. 在多模态学习中表现优异
+    """
+
+    def __init__(self, graph_dim=64, text_dim=64, output_dim=64, rank=8, dropout=0.1):
+        super().__init__()
+        self.rank = rank
+
+        # Tucker分解的三个因子矩阵
+        self.graph_factor = nn.Linear(graph_dim, rank, bias=False)
+        self.text_factor = nn.Linear(text_dim, rank, bias=False)
+        self.core_factor = nn.Linear(rank * rank, output_dim)
+
+        self.layer_norm = nn.LayerNorm(output_dim)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, graph_feat, text_feat):
+        """
+        Args:
+            graph_feat: [batch, graph_dim]
+            text_feat: [batch, text_dim]
+        Returns:
+            fused: [batch, output_dim]
+        """
+        batch_size = graph_feat.size(0)
+
+        # 因子分解
+        graph_compressed = self.graph_factor(graph_feat)  # [batch, rank]
+        text_compressed = self.text_factor(text_feat)     # [batch, rank]
+
+        # 外积形成核心张量
+        # [batch, rank, 1] × [batch, 1, rank] = [batch, rank, rank]
+        core_tensor = torch.bmm(
+            graph_compressed.unsqueeze(2),
+            text_compressed.unsqueeze(1)
+        )  # [batch, rank, rank]
+
+        # Flatten并投影到输出维度
+        core_flat = core_tensor.view(batch_size, -1)  # [batch, rank*rank]
+        fused = self.core_factor(core_flat)  # [batch, output_dim]
+
+        # 归一化
+        fused = self.layer_norm(fused)
+        fused = self.dropout(fused)
+
+        return fused
+
+
 class FineGrainedCrossModalAttention(nn.Module):
     """Fine-grained cross-modal attention between atoms and text tokens.
 
@@ -584,6 +835,11 @@ class ALIGNNConfig(BaseSettings):
     cross_modal_hidden_dim: int = 256
     cross_modal_num_heads: int = 4
     cross_modal_dropout: float = 0.1
+
+    # Late fusion type (后期融合方式)
+    late_fusion_type: Literal["concat", "gated", "bilinear", "adaptive", "tucker"] = "concat"
+    late_fusion_rank: int = 16  # For bilinear and tucker fusion (rank for low-rank decomposition)
+    late_fusion_output_dim: int = 64  # Output dimension after fusion
 
     # Fine-grained attention settings (NEW!)
     use_fine_grained_attention: bool = False  # Enable fine-grained atom-token attention
@@ -847,13 +1103,71 @@ class ALIGNN(nn.Module):
                 num_heads=config.cross_modal_num_heads,
                 dropout=config.cross_modal_dropout
             )
-            # Fusion layer after cross-modal attention (concat fusion)
+
+        # Late fusion module
+        self.late_fusion_type = config.late_fusion_type
+        print(f"\n{'='*80}")
+        print(f"🔗 后期融合配置")
+        print(f"{'='*80}")
+        print(f"融合类型: {config.late_fusion_type}")
+
+        if config.late_fusion_type == "concat":
+            # 原始concat融合
+            self.fusion_module = None
             self.fc1 = nn.Linear(128, 64)  # Concat: 64 + 64 = 128-dim
             self.fc = nn.Linear(64, config.output_features)
+            print(f"参数: 简单拼接，输入128维 -> 64维 -> {config.output_features}维")
+
+        elif config.late_fusion_type == "gated":
+            # 门控融合
+            self.fusion_module = GatedFusion(
+                graph_dim=64,
+                text_dim=64,
+                output_dim=config.late_fusion_output_dim,
+                dropout=config.cross_modal_dropout
+            )
+            self.fc = nn.Linear(config.late_fusion_output_dim, config.output_features)
+            print(f"参数: 门控融合，输出维度 {config.late_fusion_output_dim}")
+
+        elif config.late_fusion_type == "bilinear":
+            # 双线性融合
+            self.fusion_module = BilinearFusion(
+                graph_dim=64,
+                text_dim=64,
+                output_dim=config.late_fusion_output_dim,
+                rank=config.late_fusion_rank,
+                dropout=config.cross_modal_dropout
+            )
+            self.fc = nn.Linear(config.late_fusion_output_dim, config.output_features)
+            print(f"参数: 双线性融合，Rank={config.late_fusion_rank}, 输出维度 {config.late_fusion_output_dim}")
+
+        elif config.late_fusion_type == "adaptive":
+            # 自适应融合
+            self.fusion_module = AdaptiveFusion(
+                graph_dim=64,
+                text_dim=64,
+                output_dim=config.late_fusion_output_dim,
+                dropout=config.cross_modal_dropout
+            )
+            self.fc = nn.Linear(config.late_fusion_output_dim, config.output_features)
+            print(f"参数: 自适应融合（加法+乘法+门控），输出维度 {config.late_fusion_output_dim}")
+
+        elif config.late_fusion_type == "tucker":
+            # Tucker分解融合
+            self.fusion_module = TuckerFusion(
+                graph_dim=64,
+                text_dim=64,
+                output_dim=config.late_fusion_output_dim,
+                rank=config.late_fusion_rank,
+                dropout=config.cross_modal_dropout
+            )
+            self.fc = nn.Linear(config.late_fusion_output_dim, config.output_features)
+            print(f"参数: Tucker分解融合，Rank={config.late_fusion_rank}, 输出维度 {config.late_fusion_output_dim}")
+
         else:
-            # Original simple concatenation
-            self.fc1 = nn.Linear(128, 64)
-            self.fc = nn.Linear(64, config.output_features)
+            raise ValueError(f"Unknown late_fusion_type: {config.late_fusion_type}")
+
+        print(f"{'='*80}\n")
 
         # Contrastive learning module
         self.use_contrastive_loss = config.use_contrastive_loss
@@ -1038,15 +1352,27 @@ class ALIGNN(nn.Module):
             else:
                 enhanced_graph, enhanced_text = self.cross_modal_attention(h, text_emb)
 
-            # Concatenation fusion of enhanced features
-            h = torch.cat([enhanced_graph, enhanced_text], dim=-1)  # [batch, 128]
-            h = F.relu(self.fc1(h))
-            out = self.fc(h)
+            # Late fusion using configured fusion module
+            if self.late_fusion_type == "concat":
+                # Original concat fusion
+                h = torch.cat([enhanced_graph, enhanced_text], dim=-1)  # [batch, 128]
+                h = F.relu(self.fc1(h))
+                out = self.fc(h)
+            else:
+                # Use advanced fusion modules
+                fused = self.fusion_module(enhanced_graph, enhanced_text)
+                out = self.fc(fused)
         else:
-            # Original simple concatenation
-            h = torch.cat((h, text_emb), 1)
-            h = F.relu(self.fc1(h))
-            out = self.fc(h)
+            # No cross-modal attention - use simple fusion
+            if self.late_fusion_type == "concat":
+                # Original concat fusion
+                h = torch.cat((h, text_emb), 1)
+                h = F.relu(self.fc1(h))
+                out = self.fc(h)
+            else:
+                # Use advanced fusion modules
+                fused = self.fusion_module(h, text_emb)
+                out = self.fc(fused)
 
         if self.link:
             out = self.link(out)
