@@ -251,6 +251,174 @@ class MiddleFusionModule(nn.Module):
         return enhanced
 
 
+class ImprovedMiddleFusionModule(nn.Module):
+    """改进的中期融合模块 - 残差缩放 + 动态门控
+
+    相比MiddleFusionModule的改进：
+    1. 可学习的节点残差权重（node_scale）
+    2. 动态门控（基于节点重要性）
+    3. 更好的特征平衡能力
+
+    预期提升：+3-6% MAE
+    """
+
+    def __init__(self, node_dim=64, text_dim=64, hidden_dim=128, num_heads=2, dropout=0.1,
+                 use_gate_norm=False, use_learnable_scale=False, initial_scale=1.0,
+                 use_residual_scaling=True, use_dynamic_gating=True,
+                 initial_node_scale=1.0):
+        """Initialize improved middle fusion module.
+
+        Args:
+            node_dim: Dimension of graph node features
+            text_dim: Dimension of text features
+            hidden_dim: Hidden dimension for fusion
+            num_heads: Number of attention heads (for future compatibility)
+            dropout: Dropout rate
+            use_gate_norm: Whether to use LayerNorm before gate
+            use_learnable_scale: Whether to use learnable scaling for text features
+            initial_scale: Initial value for text scaling factor
+            use_residual_scaling: Whether to use learnable residual scaling (NEW!)
+            use_dynamic_gating: Whether to use importance-based dynamic gating (NEW!)
+            initial_node_scale: Initial value for node residual scaling (NEW!)
+        """
+        super().__init__()
+        self.node_dim = node_dim
+        self.text_dim = text_dim
+        self.hidden_dim = hidden_dim
+        self.use_gate_norm = use_gate_norm
+        self.use_learnable_scale = use_learnable_scale
+        self.use_residual_scaling = use_residual_scaling
+        self.use_dynamic_gating = use_dynamic_gating
+
+        # Text transformation
+        self.text_transform = nn.Sequential(
+            nn.Linear(text_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, node_dim)
+        )
+
+        # === 改进1: 可学习的文本缩放因子 ===
+        if use_learnable_scale:
+            self.text_scale = nn.Parameter(torch.tensor(initial_scale, dtype=torch.float32))
+            print(f"✅ [Improved] 启用可学习文本缩放因子，初始值: {initial_scale:.2f}")
+        else:
+            self.register_buffer('text_scale', torch.tensor(1.0, dtype=torch.float32))
+
+        # === 改进2: 可学习的节点残差缩放因子 (NEW!) ===
+        if use_residual_scaling:
+            self.node_scale = nn.Parameter(torch.tensor(initial_node_scale, dtype=torch.float32))
+            print(f"✅ [Improved] 启用可学习节点残差缩放，初始值: {initial_node_scale:.2f}")
+        else:
+            self.register_buffer('node_scale', torch.tensor(1.0, dtype=torch.float32))
+
+        # === 改进3: 动态门控 - 节点重要性预测器 (NEW!) ===
+        if use_dynamic_gating:
+            self.importance_predictor = nn.Sequential(
+                nn.Linear(node_dim, node_dim // 2),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(node_dim // 2, 1),
+                nn.Sigmoid()
+            )
+            # 可学习的重要性调制强度
+            self.importance_modulation = nn.Parameter(torch.tensor(1.0, dtype=torch.float32))
+            print(f"✅ [Improved] 启用动态门控（基于节点重要性）")
+
+        # === Gate 输入归一化 ===
+        if use_gate_norm:
+            self.gate_norm = nn.LayerNorm(node_dim * 2)
+            print(f"✅ [Improved] 启用 Gate LayerNorm")
+
+        # Gate mechanism
+        self.gate = nn.Sequential(
+            nn.Linear(node_dim + node_dim, node_dim),
+            nn.Sigmoid()
+        )
+
+        self.layer_norm = nn.LayerNorm(node_dim)
+        self.dropout = nn.Dropout(dropout)
+
+        # 存储alpha值（用于分析）
+        self.stored_alphas = None
+
+    def forward(self, node_feat, text_feat, batch_num_nodes=None):
+        """Apply improved middle fusion.
+
+        Args:
+            node_feat: Node features [total_nodes, node_dim] or [batch_size, node_dim]
+            text_feat: Text features [batch_size, text_dim]
+            batch_num_nodes: List of number of nodes in each graph
+
+        Returns:
+            Enhanced node features with same shape as input
+        """
+        batch_size = text_feat.size(0)
+        num_nodes = node_feat.size(0)
+
+        # Transform text features
+        text_transformed = self.text_transform(text_feat)  # [batch_size, node_dim]
+
+        # === 应用文本缩放 ===
+        text_transformed = text_transformed * self.text_scale
+
+        # Broadcast text features to all nodes
+        if num_nodes != batch_size:
+            if batch_num_nodes is not None:
+                text_expanded = []
+                for i, num in enumerate(batch_num_nodes):
+                    text_expanded.append(text_transformed[i].unsqueeze(0).repeat(num, 1))
+                text_broadcasted = torch.cat(text_expanded, dim=0)  # [total_nodes, node_dim]
+            else:
+                text_pooled = text_transformed.mean(dim=0, keepdim=True)  # [1, node_dim]
+                text_broadcasted = text_pooled.expand(num_nodes, -1)
+        else:
+            text_broadcasted = text_transformed
+
+        # === 改进：预测节点重要性（用于动态门控）===
+        if self.use_dynamic_gating:
+            importance = self.importance_predictor(node_feat)  # [total_nodes, 1]
+        else:
+            importance = None
+
+        # Gated fusion
+        gate_input = torch.cat([node_feat, text_broadcasted], dim=-1)  # [*, node_dim*2]
+
+        # === 应用 Gate LayerNorm ===
+        if self.use_gate_norm:
+            gate_input = self.gate_norm(gate_input)
+
+        # 计算基础门控权重
+        gate_weight = self.gate(gate_input)  # [total_nodes, node_dim]
+
+        # === 改进：重要性调制门控（动态门控）===
+        if self.use_dynamic_gating and importance is not None:
+            # 重要节点获得更强的文本信息
+            gate_modulated = gate_weight * (1.0 + importance * self.importance_modulation)
+        else:
+            gate_modulated = gate_weight
+
+        # 存储alpha值用于分析
+        self.stored_alphas = gate_modulated.detach()
+
+        # === 改进：残差缩放融合 ===
+        if self.use_residual_scaling:
+            # 可学习的节点和文本残差权重
+            fused = (
+                self.node_scale * node_feat +
+                gate_modulated * text_broadcasted  # text_scale已经在text_transformed中应用
+            )
+        else:
+            # 原始方式（节点残差权重=1.0）
+            fused = node_feat + gate_modulated * text_broadcasted
+
+        # Layer normalization and dropout
+        enhanced = self.layer_norm(fused)
+        enhanced = self.dropout(enhanced)
+
+        return enhanced
+
+
 class CrossModalAttention(nn.Module):
     """Cross-modal attention between graph and text features.
 
@@ -861,6 +1029,12 @@ class ALIGNNConfig(BaseSettings):
     middle_fusion_use_learnable_scale: bool = False  # Use learnable scaling factor for text features
     middle_fusion_initial_scale: float = 1.0  # Initial value for learnable scaling (use 12.0 based on diagnostics)
 
+    # Middle fusion improvements (NEW! - ImprovedMiddleFusionModule)
+    use_improved_middle_fusion: bool = False  # Use ImprovedMiddleFusionModule instead of MiddleFusionModule
+    middle_fusion_use_residual_scaling: bool = True  # Enable learnable node residual scaling
+    middle_fusion_use_dynamic_gating: bool = True  # Enable importance-based dynamic gating
+    middle_fusion_initial_node_scale: float = 1.0  # Initial value for node residual scale
+
     # Contrastive learning settings
     use_contrastive_loss: bool = False
     contrastive_loss_weight: float = 0.1
@@ -1068,17 +1242,49 @@ class ALIGNN(nn.Module):
         if self.use_middle_fusion:
             # Parse middle_fusion_layers string to get layer indices
             fusion_layers = [int(x.strip()) for x in config.middle_fusion_layers.split(',')]
+
+            # Choose fusion module type
+            use_improved = config.use_improved_middle_fusion
+            if use_improved:
+                print(f"\n{'='*80}")
+                print(f"🚀 中期融合配置：ImprovedMiddleFusionModule")
+                print(f"{'='*80}")
+                print(f"融合层: {fusion_layers}")
+                print(f"改进特性:")
+                print(f"  ✅ 残差缩放: {config.middle_fusion_use_residual_scaling}")
+                print(f"  ✅ 动态门控: {config.middle_fusion_use_dynamic_gating}")
+                print(f"  ✅ 可学习文本缩放: {config.middle_fusion_use_learnable_scale}")
+                print(f"  ✅ Gate LayerNorm: {config.middle_fusion_use_gate_norm}")
+                print(f"{'='*80}\n")
+
             for layer_idx in fusion_layers:
-                self.middle_fusion_modules[f'layer_{layer_idx}'] = MiddleFusionModule(
-                    node_dim=config.hidden_features,
-                    text_dim=64,  # After text_projection
-                    hidden_dim=config.middle_fusion_hidden_dim,
-                    num_heads=config.middle_fusion_num_heads,
-                    dropout=config.middle_fusion_dropout,
-                    use_gate_norm=config.middle_fusion_use_gate_norm,
-                    use_learnable_scale=config.middle_fusion_use_learnable_scale,
-                    initial_scale=config.middle_fusion_initial_scale
-                )
+                if use_improved:
+                    # Use improved fusion module
+                    self.middle_fusion_modules[f'layer_{layer_idx}'] = ImprovedMiddleFusionModule(
+                        node_dim=config.hidden_features,
+                        text_dim=64,  # After text_projection
+                        hidden_dim=config.middle_fusion_hidden_dim,
+                        num_heads=config.middle_fusion_num_heads,
+                        dropout=config.middle_fusion_dropout,
+                        use_gate_norm=config.middle_fusion_use_gate_norm,
+                        use_learnable_scale=config.middle_fusion_use_learnable_scale,
+                        initial_scale=config.middle_fusion_initial_scale,
+                        use_residual_scaling=config.middle_fusion_use_residual_scaling,
+                        use_dynamic_gating=config.middle_fusion_use_dynamic_gating,
+                        initial_node_scale=config.middle_fusion_initial_node_scale
+                    )
+                else:
+                    # Use original fusion module
+                    self.middle_fusion_modules[f'layer_{layer_idx}'] = MiddleFusionModule(
+                        node_dim=config.hidden_features,
+                        text_dim=64,  # After text_projection
+                        hidden_dim=config.middle_fusion_hidden_dim,
+                        num_heads=config.middle_fusion_num_heads,
+                        dropout=config.middle_fusion_dropout,
+                        use_gate_norm=config.middle_fusion_use_gate_norm,
+                        use_learnable_scale=config.middle_fusion_use_learnable_scale,
+                        initial_scale=config.middle_fusion_initial_scale
+                    )
             self.middle_fusion_layer_indices = fusion_layers
 
         # Fine-grained cross-modal attention module (atom-token level)

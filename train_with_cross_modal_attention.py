@@ -163,6 +163,16 @@ def get_parser():
     parser.add_argument('--middle_fusion_initial_scale', type=float, default=1.0,
                         help='中期融合可学习缩放因子的初始值（建议基于诊断结果设置，如12.0）')
 
+    # 中期融合改进参数 ⭐ NEW! (ImprovedMiddleFusionModule)
+    parser.add_argument('--use_improved_middle_fusion', type=str2bool, default=False,
+                        help='是否使用改进的中期融合模块（包含残差缩放+动态门控）')
+    parser.add_argument('--middle_fusion_use_residual_scaling', type=str2bool, default=True,
+                        help='是否使用可学习的节点残差缩放（node_scale参数）')
+    parser.add_argument('--middle_fusion_use_dynamic_gating', type=str2bool, default=True,
+                        help='是否使用动态门控（基于节点重要性自适应调整融合强度）')
+    parser.add_argument('--middle_fusion_initial_node_scale', type=float, default=1.0,
+                        help='节点残差缩放的初始值（默认1.0）')
+
     # 细粒度注意力参数（原子-文本token级别）⭐ NEW!
     parser.add_argument('--use_fine_grained_attention', type=str2bool, default=False,
                         help='是否使用细粒度注意力（原子-文本token级别）')
@@ -524,6 +534,11 @@ def create_config(args):
         middle_fusion_use_gate_norm=args.middle_fusion_use_gate_norm,
         middle_fusion_use_learnable_scale=args.middle_fusion_use_learnable_scale,
         middle_fusion_initial_scale=args.middle_fusion_initial_scale,
+        # 中期融合改进配置 ⭐ NEW!
+        use_improved_middle_fusion=args.use_improved_middle_fusion,
+        middle_fusion_use_residual_scaling=args.middle_fusion_use_residual_scaling,
+        middle_fusion_use_dynamic_gating=args.middle_fusion_use_dynamic_gating,
+        middle_fusion_initial_node_scale=args.middle_fusion_initial_node_scale,
         # 对比学习配置
         use_contrastive_loss=args.use_contrastive,
         contrastive_loss_weight=args.contrastive_weight,
