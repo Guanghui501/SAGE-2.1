@@ -386,14 +386,12 @@ def train_dgl(config: Union[TrainingConfig, Dict[str, Any]], model: nn.Module = 
         metric_name = 'accuracy'
         best_val_metric = 0.0
         best_test_metric = 0.0
-        best_loss = float('inf')
         metric_better = lambda new, old: new > old  # Higher is better
     else:
         # For regression, track MAE (lower is better)
         metric_name = 'mae'
         best_val_metric = float('inf')
         best_test_metric = float('inf')
-        best_loss = float('inf')
         metric_better = lambda new, old: new < old  # Lower is better
 
     # Early stopping setup
@@ -478,7 +476,7 @@ def train_dgl(config: Union[TrainingConfig, Dict[str, Any]], model: nn.Module = 
                 pbar.log_message(f"Val_MAE: {vmetrics['mae']:.4f}")
                 pbar.log_message(f"Test_MAE: {tstmetrics['mae']:.4f}")
 
-        nonlocal best_loss, best_val_metric, best_test_metric, epochs_without_improvement
+        nonlocal best_val_metric, best_test_metric, epochs_without_improvement
 
         # Save best validation model
         improved = False
@@ -512,9 +510,6 @@ def train_dgl(config: Union[TrainingConfig, Dict[str, Any]], model: nn.Module = 
             torch.save(best_test_checkpoint, os.path.join(config.output_dir, "best_test_model.pt"))
             metric_display = f"{metric_name.upper()}: {best_test_metric:.4f}"
             print(f"✅ Saved best test model ({metric_display}) at epoch {engine.state.epoch}")
-
-        if vmetrics['loss'] < best_loss:
-            best_loss = vmetrics['loss']
 
         # Early stopping check
         if not improved:
